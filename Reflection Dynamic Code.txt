@@ -1,0 +1,83 @@
+Reflection Register Repositories:
+
+
+private static void AddRepositoryServices(IServiceCollection services, Assembly assembly)
+        {
+            var repositoryTypes = assembly.GetTypes()
+               .Where(type => !type.IsInterface && type.GetInterface(typeof(IRepository<IBaseEntity<long>, long>).Name) != null);
+ 
+            // filter out RepositoryBase<>
+            var nonBaseRepos = repositoryTypes.Where(t => t != typeof(NB.Omc.Trading.Repository.Base.Repository<IBaseEntity<long>, long>));
+ 
+            foreach (var repositoryType in nonBaseRepos)
+            {
+                var interfaces = repositoryType.GetInterfaces()
+                    .Where(@interface => @interface.IsGenericType && @interface.GetGenericTypeDefinition() == typeof(NB.Omc.Trading.Repository.Base.IRepository<IBaseEntity<long>, long>))
+                    .ToList();
+ 
+                if (interfaces.Count() != 1)
+                {
+                    throw new InvalidOperationException($"Repository '{repositoryType.Name}' must implement only one interface that implements IRepositoryBase<T>.");
+                }
+ 
+                services.AddScoped(interfaces[0], repositoryType);
+            }
+}
+
+Register Repositories V2:
+ 
+            var repositoryTypesAUX = assembly.GetTypes().Where(x => !x.IsInterface && !x.IsAbstract &&
+                    x.GetInterface(typeof(IRepository<IBaseEntity<long>, long>).Name) != null);
+ 
+            foreach (var repositoryType in repositoryTypes)
+            {
+                var type = repositoryType.UnderlyingSystemType;
+                services.AddSingleton(type.GetInterface($"I{type.Name}"), type);
+            }
+
+
+Call Method Dynamic:
+
+        internal readonly string _assemblyMappersName = "NB.Omc.Trading";
+        private readonly IJobRepository _jobRepository;
+ 
+        private readonly IProcessExampleFileModelRepository _processExampleFileModelRepository;
+ 
+        private readonly TradingDbContext _context;
+ 
+        public JobDataBaseManagerProvider(IJobRepository jobRepository, IProcessExampleFileModelRepository processExampleFileModelRepository, TradingDbContext tradingDbContext)
+        {
+            _jobRepository = jobRepository;
+            _processExampleFileModelRepository = processExampleFileModelRepository;
+            _context = tradingDbContext;
+        }
+
+var result = await _jobDataBaseManagerProvider.GenericMethod<PROCESS_EXAMPLE_FILE_MODEL>(new PROCESS_EXAMPLE_FILE_MODEL() { });
+       
+ public async Task<object> GenericMethod<T>(T valueToInsert)
+        {
+            var assembly = AppDomain.CurrentDomain.GetAssemblies().First(t => string.Equals(t.GetName().Name, _assemblyMappersName, StringComparison.OrdinalIgnoreCase));
+ 
+            if (assembly != null)
+            {
+                var typesList = assembly.GetTypes()
+                                .Where(type => type.BaseType != null && type.BaseType.GenericTypeArguments.Any(g => g.Name.Contains(typeof(T).Name.ToString())))
+                                .ToList();
+ 
+                if (typesList != null && typesList.Any())
+                {
+                    var type = typesList.First();
+ 
+                    var obj = type.GetMethod("CreateAsync");
+                    var task = (Task) obj.Invoke(Activator.CreateInstance(type, _context), new object[] { valueToInsert });
+ 
+                    await task.ConfigureAwait(false);
+ 
+                    var resultProperty = task.GetType().GetProperty("Result");
+                    return resultProperty.GetValue(task);
+                }
+            }
+ 
+            await Task.CompletedTask;
+            return null;
+        }
